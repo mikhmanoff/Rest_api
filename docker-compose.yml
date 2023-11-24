@@ -1,0 +1,110 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: web_api
+    ports:
+      - "8000:8000"
+    environment:
+      CONFIG_FILE: ".prod.env"
+      SQLALCHEMY_WARN_20: 0
+    entrypoint: >
+      sh -c "
+        python3 main.py
+      "
+    volumes:
+      - main_app:/menu_app/reports/
+    networks:
+      - web_main_api
+    restart: on-failure
+    depends_on:
+      celery:
+        condition: service_started
+      db:
+        condition: service_healthy
+      cache_data:
+        condition: service_healthy
+
+  cache_data:
+    image: redis:latest
+    container_name: redis-db
+    volumes:
+      - redis_data:/var/lib/redis/data/
+    expose:
+      - 6379
+    env_file:
+      - ".prod.env"
+    networks:
+      - web_main_api
+    healthcheck:
+      test: [ "CMD", "redis-cli","ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db:
+    image: postgres:15.1-alpine
+    container_name: db-pg
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    expose:
+      - 5432
+    env_file:
+      - ".prod.env"
+    restart: on-failure
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - web_main_api
+
+  rabbitmq:
+    container_name: rabbit-mq
+    image: rabbitmq:3.11.8-alpine
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    expose:
+      - 5672
+    volumes:
+      - rabbit_data:/var/lib/rabbit/data/
+    networks:
+      - web_main_api
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery
+    entrypoint: >
+      sh -c "
+        celery -A app.celery.celery_app worker -l info -Q celery -c 2
+      "
+    environment:
+      CONFIG_FILE: ".prod.env"
+    networks:
+      - web_main_api
+    restart: on-failure
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - main_app:/menu_app/reports/
+
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbit_data:
+  main_app:
+
+networks:
+  web_main_api:
+    name: web_main_api
